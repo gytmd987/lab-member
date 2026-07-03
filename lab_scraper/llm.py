@@ -69,6 +69,19 @@ class SearchJudgement(BaseModel):
     reasoning: str
 
 
+class FacultyMember(BaseModel):
+    name: str
+    lab_url: str | None = Field(
+        default=None,
+        description="이 교수의 개인/연구실/프로필 페이지 링크(주어진 링크 목록 중), 없으면 null",
+    )
+
+
+class FacultyList(BaseModel):
+    professors: list[FacultyMember] = Field(default_factory=list)
+    reasoning: str
+
+
 def _strip_code_fence(text: str) -> str:
     """```json ... ``` 같은 코드펜스를 벗겨서 순수 JSON만 남긴다."""
     t = text.strip()
@@ -183,6 +196,26 @@ class LLM:
             user=f"Current page: {current_url}\n\n--- LINKS ---\n{link_lines}",
             schema=MemberPageDecision,
             max_tokens=512,
+        )
+
+    def extract_faculty(self, url: str, page_text: str, links: list[Link]) -> FacultyList:
+        """학과 교수진 페이지에서 교수 목록(이름 + 개인/연구실 링크)을 뽑는다."""
+        link_lines = "\n".join(f"- [{l.text or '(no text)'}]({l.href})" for l in links)
+        return self._complete(
+            system=(
+                "This is a university department's faculty/people page. Extract the list of "
+                "PROFESSORS (faculty members) — not staff, students, or administrators. For "
+                "each professor, if the page links to their personal/lab/profile page, set "
+                "lab_url to that absolute URL chosen from the link list (match by the "
+                "professor's name in the link text or href); otherwise null. Do not invent "
+                "links. Emeritus/adjunct faculty may be included if clearly professors."
+            ),
+            user=(
+                f"Faculty page: {url}\n\n--- PAGE TEXT ---\n{page_text}\n\n"
+                f"--- LINKS ---\n{link_lines}"
+            ),
+            schema=FacultyList,
+            max_tokens=8192,
         )
 
     def extract_members(self, page_text: str) -> MemberExtraction:

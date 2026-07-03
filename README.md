@@ -68,10 +68,33 @@ export LAB_SCRAPER_LLM_USER_TYPE='id'                         # User-Type
 
 ## 실행
 
+가장 간단한 방법 — 학과 교수진 페이지 URL만 넣으면 교수 목록을 자동으로
+수집해서 전부 처리한다:
+
 ```bash
-python main.py professors.json           # 결과를 results.xlsx 로 저장
-python main.py professors.json out.xlsx  # 파일명 지정
+python main.py
+# → "학과 교수진 페이지 URL을 입력하세요: " 프롬프트가 뜸
+#   예: https://me.snu.ac.kr/faculty
+# → "학과 이름(선택, 엔터로 건너뛰기): " (검색 정확도용, 안 넣어도 됨)
+# → "결과 파일 이름(엔터=results.xlsx): "
 ```
+
+URL/파일명을 인자로 바로 줄 수도 있다(프롬프트 생략):
+
+```bash
+python main.py https://me.snu.ac.kr/faculty              # 결과는 results.xlsx
+python main.py https://me.snu.ac.kr/faculty snu_me.xlsx  # 파일명 지정
+```
+
+교수 목록을 직접 만든 JSON으로 돌리려면(자동 수집 대신):
+
+```bash
+python main.py professors.json           # 결과는 results.xlsx
+python main.py professors.json out.xlsx
+```
+
+결과 파일명은 안 주면 `results.xlsx`로 저장되며 **같은 이름이면 이전 결과를
+덮어쓴다**. 실행할 때 프롬프트에서 다른 이름을 넣거나, 인자로 지정하면 된다.
 
 결과는 **xlwings로 엑셀 파일**에 저장된다. `요약` 시트(교수별 상태·사이트·
 구성원 수·비고)와 `구성원` 시트(교수별 명단)로 나뉜다. xlwings는 Excel

@@ -31,6 +31,27 @@ from .models import ProcessStatus, ProfessorInput, ProfessorResult
 log = logging.getLogger(__name__)
 
 
+def collect_professors(
+    department_url: str, browser: Browser, judge: llm.LLM, department: str | None = None
+) -> list[ProfessorInput]:
+    """학과 교수진 페이지 URL에서 교수 목록을 뽑아 ProfessorInput 리스트로 만든다.
+
+    페이지에 각 교수의 개인/연구실 링크가 있으면 lab_url로 채워, 이후 이름
+    재검색 단계를 건너뛰게 한다.
+    """
+    fetch = browser.fetch(department_url)
+    if not fetch.ok:
+        log.warning("학과 페이지 접근 실패(%s): %s", fetch.failure_reason, department_url)
+        return []
+
+    faculty = judge.extract_faculty(fetch.url, fetch.text, fetch.links)
+    return [
+        ProfessorInput(name=f.name, department=department, lab_url=f.lab_url)
+        for f in faculty.professors
+        if f.name.strip()
+    ]
+
+
 def process_professor(
     prof: ProfessorInput, browser: Browser, judge: llm.LLM
 ) -> ProfessorResult:
