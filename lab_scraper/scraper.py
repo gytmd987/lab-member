@@ -96,7 +96,7 @@ def _discover_site(prof: ProfessorInput, browser: Browser, judge: llm.LLM) -> st
     for attempt in range(1, MAX_SEARCH_ATTEMPTS + 1):
         query = _search_query(prof, attempt)
         try:
-            results_text = search.search_web(judge.client, query)
+            results_text = search.search_web(browser, query)
         except Exception as exc:  # 검색 자체 실패는 치명적이지 않게 넘어간다
             log.warning("검색 실패(%s): %s", prof.name, exc)
             continue

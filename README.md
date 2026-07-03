@@ -1,8 +1,8 @@
 # lab-member
 
 연구실 구성원 스크래퍼. 학과 페이지의 교수 목록에서 시작해 각 교수의
-연구실/개인 페이지를 방문하고, LLM(Claude)이 텍스트·문맥으로 판단해
-구성원(학생/연구원) 명단을 수집한다.
+연구실/개인 페이지를 방문하고, 사내 LLM(OpenAI 호환 API)이 텍스트·문맥으로
+판단해 구성원(학생/연구원) 명단을 수집한다.
 
 ## 설계 원칙
 
@@ -35,11 +35,22 @@ Scholar·ResearchGate 등에서 엉뚱한 정보를 긁어오는 걸 막는다.
 
 ## 설치
 
+LLM은 **사내 OpenAI 호환 API**를 사용한다(`openai` SDK에 `base_url`/`api_key`만
+사내 것으로 지정).
+
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=...   # 또는 `ant auth login`
+export LAB_SCRAPER_LLM_BASE_URL=https://llm.internal/v1  # 사내 엔드포인트
+export LAB_SCRAPER_LLM_API_KEY=...                       # 사내 게이트웨이 키
+export LAB_SCRAPER_MODEL=...                             # 사내 모델 이름
 # Chromium + chromedriver 필요 (경로는 환경변수로 지정 가능, config.py 참고)
 ```
+
+사내 API가 JSON 스키마 강제(structured outputs)까지는 아니고 **JSON 모드만**
+지원하므로, `response_format={"type":"json_object"}`로 요청하고 프롬프트에
+스키마를 명시한 뒤 Pydantic으로 검증한다(파싱 실패 시 오류를 붙여 재시도).
+게이트웨이가 `response_format`을 거부하면 `LAB_SCRAPER_JSON_MODE=0`으로 끄면
+프롬프트만으로 JSON을 유도한다.
 
 ## 실행
 
@@ -63,8 +74,8 @@ python main.py professors.json out.json # 파일로 저장
 |---|---|
 | `lab_scraper/models.py` | 결과 데이터 모델 · 처리 상태 enum |
 | `lab_scraper/browser.py` | Selenium 래퍼, 접근 실패 판정(404/타임아웃/로그인/추출불가) |
-| `lab_scraper/llm.py` | Claude 판단 계층(페이지 식별·구성원 페이지 탐색·명단 추출·정보없음 판정·검색결과 판정), structured outputs |
-| `lab_scraper/search.py` | 이름 재검색(Claude web_search 서버 툴) |
+| `lab_scraper/llm.py` | LLM 판단 계층(페이지 식별·구성원 페이지 탐색·명단 추출·정보없음 판정·검색결과 판정). 사내 OpenAI 호환 API + JSON 모드 + Pydantic 검증 |
+| `lab_scraper/search.py` | 이름 재검색(Selenium으로 검색엔진 결과 페이지를 긁음) |
 | `lab_scraper/scraper.py` | 오케스트레이션 + 재시도 로직 |
 | `lab_scraper/config.py` | 환경변수로 덮어쓸 수 있는 설정값 |
 | `main.py` | CLI 진입점 |
