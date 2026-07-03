@@ -7,3 +7,6 @@ env/
 .DS_Store
 out.json
 professors.json
+results.xlsx
+*.xlsx
+~$*.xlsx

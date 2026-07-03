@@ -55,9 +55,14 @@ export LAB_SCRAPER_MODEL=...                             # 사내 모델 이름
 ## 실행
 
 ```bash
-python main.py professors.json          # 결과를 stdout(JSON)으로
-python main.py professors.json out.json # 파일로 저장
+python main.py professors.json           # 결과를 results.xlsx 로 저장
+python main.py professors.json out.xlsx  # 파일명 지정
 ```
+
+결과는 **xlwings로 엑셀 파일**에 저장된다. `요약` 시트(교수별 상태·사이트·
+구성원 수·비고)와 `구성원` 시트(교수별 명단)로 나뉜다. xlwings는 Excel
+애플리케이션을 구동하므로 **실행 PC에 Excel이 설치돼 있어야 한다**(Windows/
+macOS). 헤드리스/리눅스 환경에서는 동작하지 않는다.
 
 입력 `professors.json`:
 
@@ -77,6 +82,7 @@ python main.py professors.json out.json # 파일로 저장
 | `lab_scraper/llm.py` | LLM 판단 계층(페이지 식별·구성원 페이지 탐색·명단 추출·정보없음 판정·검색결과 판정). 사내 OpenAI 호환 API + JSON 모드 + Pydantic 검증 |
 | `lab_scraper/search.py` | 이름 재검색(Selenium으로 검색엔진 결과 페이지를 긁음) |
 | `lab_scraper/scraper.py` | 오케스트레이션 + 재시도 로직 |
+| `lab_scraper/excel_out.py` | 결과를 xlwings로 엑셀(.xlsx)에 저장(요약/구성원 시트) |
 | `lab_scraper/config.py` | 환경변수로 덮어쓸 수 있는 설정값 |
 | `main.py` | CLI 진입점 |
 

@@ -1,14 +1,16 @@
 """연구실 구성원 스크래퍼 실행 진입점.
 
 사용법:
-    python main.py professors.json            # 결과를 stdout(JSON)으로
-    python main.py professors.json out.json   # 파일로 저장
+    python main.py professors.json               # 결과를 results.xlsx 로 저장
+    python main.py professors.json out.xlsx      # 파일명 지정
 
 입력 JSON 형식 (교수 배열):
     [
       {"name": "홍길동", "department": "컴퓨터공학과", "lab_url": "https://..."},
       {"name": "김철수", "department": "전자공학과"}
     ]
+
+결과는 xlwings로 엑셀 파일에 저장된다("요약" 시트 + "구성원" 시트).
 """
 
 from __future__ import annotations
@@ -16,11 +18,10 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from dataclasses import asdict
 
-from lab_scraper import llm
+from lab_scraper import excel_out, llm
 from lab_scraper.browser import Browser
-from lab_scraper.models import ProfessorInput
+from lab_scraper.models import ProfessorInput, ProfessorResult
 from lab_scraper.scraper import process_professor
 
 
@@ -44,10 +45,10 @@ def main(argv: list[str]) -> int:
         return 2
 
     professors = load_professors(argv[1])
-    out_path = argv[2] if len(argv) > 2 else None
+    out_path = argv[2] if len(argv) > 2 else "results.xlsx"
 
     judge = llm.LLM()
-    results = []
+    results: list[ProfessorResult] = []
     with Browser() as browser:
         for prof in professors:
             logging.info("처리 시작: %s", prof.name)
@@ -56,27 +57,11 @@ def main(argv: list[str]) -> int:
                 "  → %s (members=%d, llm_calls=%d)",
                 res.status.value, len(res.members), res.llm_calls,
             )
-            results.append(_result_to_dict(res))
+            results.append(res)
 
-    payload = json.dumps(results, ensure_ascii=False, indent=2)
-    if out_path:
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(payload)
-        logging.info("결과 저장: %s", out_path)
-    else:
-        print(payload)
+    saved = excel_out.write_results(results, out_path)
+    logging.info("완료: %s (교수 %d명)", saved, len(results))
     return 0
-
-
-def _result_to_dict(res) -> dict:
-    return {
-        "professor": asdict(res.professor),
-        "status": res.status.value,
-        "site_url": res.site_url,
-        "members": [asdict(m) for m in res.members],
-        "detail": res.detail,
-        "llm_calls": res.llm_calls,
-    }
 
 
 if __name__ == "__main__":
