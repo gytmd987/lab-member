@@ -5,13 +5,60 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 # --- LLM (사내 OpenAI 호환 API) ---------------------------------------
-# openai SDK에 base_url/api_key만 사내 것으로 바꿔 붙인다.
-LLM_BASE_URL = os.environ.get("LAB_SCRAPER_LLM_BASE_URL")  # 예: https://llm.internal/v1
-LLM_API_KEY = os.environ.get("LAB_SCRAPER_LLM_API_KEY", "dummy")  # 사내 게이트웨이가 요구하는 값
-MODEL = os.environ.get("LAB_SCRAPER_MODEL", "gpt-4o")  # 사내 모델 이름으로 지정
+# openai SDK에 base_url을 사내 것으로 바꾸고, 인증/식별은 헤더로 붙인다.
+# (사내 게이트웨이는 OPENAI_API_KEY가 아니라 x-dep-ticket 헤더로 인증하므로
+#  api_key는 더미여도 된다. 단, openai SDK가 빈 값이면 에러라 더미를 준다.)
+LLM_BASE_URL = os.environ.get("LAB_SCRAPER_LLM_BASE_URL")  # 예: http://llm.internal/...
+LLM_API_KEY = os.environ.get("LAB_SCRAPER_LLM_API_KEY", "dummy")  # 대개 더미
+MODEL = os.environ.get("LAB_SCRAPER_MODEL", "gemma4")  # 사내 모델 이름으로 지정
+
+# --- 사내 게이트웨이 헤더 (고정, 앱 공통) ------------------------------
+# 사내 API 예제의 default_headers에 대응. 값은 환경변수로 지정한다.
+#   x-dep-ticket     : 인증 크리덴셜 (예: "credential:TICKET-....")
+#   Send-System-Name : 호출 시스템 이름
+#   User-Id / User-Type : 호출 사용자 식별
+LLM_CREDENTIAL_KEY = os.environ.get("LAB_SCRAPER_LLM_CREDENTIAL_KEY", "")
+LLM_SYSTEM_NAME = os.environ.get("LAB_SCRAPER_LLM_SYSTEM_NAME", "")
+LLM_USER_ID = os.environ.get("LAB_SCRAPER_LLM_USER_ID", "")
+LLM_USER_TYPE = os.environ.get("LAB_SCRAPER_LLM_USER_TYPE", "")
+
+
+def _load_json_env(name: str) -> dict:
+    """환경변수를 JSON dict로 파싱한다. 없거나 잘못됐으면 빈 dict."""
+    raw = os.environ.get(name)
+    if not raw:
+        return {}
+    try:
+        val = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return val if isinstance(val, dict) else {}
+
+
+# 위 4개 외에 게이트웨이가 요구하는 추가 고정 헤더가 있으면 여기에.
+# 예: export LAB_SCRAPER_LLM_HEADERS='{"X-Extra":"value"}'
+LLM_EXTRA_HEADERS: dict = _load_json_env("LAB_SCRAPER_LLM_HEADERS")
+
+
+def fixed_headers() -> dict:
+    """OpenAI 클라이언트 default_headers로 넘길 고정 헤더 dict를 만든다.
+
+    값이 빈 항목은 제외한다. Prompt-Msg-Id / Completion-Msg-Id 처럼 요청마다
+    달라져야 하는 헤더는 여기 넣지 않고 호출 시점에 생성한다(llm.py 참고).
+    """
+    headers = {
+        "x-dep-ticket": LLM_CREDENTIAL_KEY,
+        "Send-System-Name": LLM_SYSTEM_NAME,
+        "User-Id": LLM_USER_ID,
+        "User-Type": LLM_USER_TYPE,
+    }
+    headers = {k: v for k, v in headers.items() if v}
+    headers.update(LLM_EXTRA_HEADERS)
+    return headers
 
 # 사내 API가 JSON 스키마 강제(structured outputs)까지는 아니고 JSON 모드만
 # 지원하므로, response_format={"type":"json_object"}로 요청하고 프롬프트로

@@ -35,16 +35,30 @@ Scholar·ResearchGate 등에서 엉뚱한 정보를 긁어오는 걸 막는다.
 
 ## 설치
 
-LLM은 **사내 OpenAI 호환 API**를 사용한다(`openai` SDK에 `base_url`/`api_key`만
-사내 것으로 지정).
+LLM은 **사내 OpenAI 호환 API**를 사용한다(`openai` SDK에 `base_url`을 사내
+것으로 지정하고, 인증·식별은 헤더로 붙인다).
 
 ```bash
 pip install -r requirements.txt
-export LAB_SCRAPER_LLM_BASE_URL=https://llm.internal/v1  # 사내 엔드포인트
-export LAB_SCRAPER_LLM_API_KEY=...                       # 사내 게이트웨이 키
-export LAB_SCRAPER_MODEL=...                             # 사내 모델 이름
+
+# --- 엔드포인트 / 모델 ---
+export LAB_SCRAPER_LLM_BASE_URL=http://llm.internal/...   # 사내 엔드포인트
+export LAB_SCRAPER_MODEL=gemma4                           # 사내 모델 이름
+# LAB_SCRAPER_LLM_API_KEY 는 대개 불필요(더미). 게이트웨이 인증은 아래 헤더로 한다.
+
+# --- 사내 게이트웨이 헤더 (고정, 앱 공통) ---
+export LAB_SCRAPER_LLM_CREDENTIAL_KEY='credential:TICKET-...'  # x-dep-ticket
+export LAB_SCRAPER_LLM_SYSTEM_NAME='lab-scraper'              # Send-System-Name
+export LAB_SCRAPER_LLM_USER_ID='your-id'                      # User-Id
+export LAB_SCRAPER_LLM_USER_TYPE='id'                         # User-Type
+
 # Chromium + chromedriver 필요 (경로는 환경변수로 지정 가능, config.py 참고)
 ```
+
+위 4개 헤더는 클라이언트 `default_headers`로 한 번만 지정된다. `Prompt-Msg-Id`,
+`Completion-Msg-Id`는 요청마다 새 UUID로 자동 생성해 붙이므로 설정할 필요 없다.
+그 외 게이트웨이가 요구하는 추가 고정 헤더가 있으면
+`LAB_SCRAPER_LLM_HEADERS='{"X-Extra":"value"}'`(JSON)로 넣으면 된다.
 
 사내 API가 JSON 스키마 강제(structured outputs)까지는 아니고 **JSON 모드만**
 지원하므로, `response_format={"type":"json_object"}`로 요청하고 프롬프트에

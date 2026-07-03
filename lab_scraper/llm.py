@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
@@ -86,8 +87,11 @@ class LLM:
     """사내 OpenAI 호환 클라이언트를 감싸고, 호출 수를 세어준다."""
 
     def __init__(self, client: OpenAI | None = None) -> None:
+        # 인증/식별 헤더는 고정이라 클라이언트 default_headers로 한 번만 지정한다.
         self.client = client or OpenAI(
-            base_url=config.LLM_BASE_URL, api_key=config.LLM_API_KEY
+            base_url=config.LLM_BASE_URL,
+            api_key=config.LLM_API_KEY,
+            default_headers=config.fixed_headers() or None,
         )
         self.calls = 0
 
@@ -119,7 +123,14 @@ class LLM:
         last_err: Exception | None = None
         for attempt in range(config.JSON_RETRIES + 1):
             self.calls += 1
-            resp = self.client.chat.completions.create(**kwargs)
+            # Prompt-Msg-Id / Completion-Msg-Id는 요청마다 새 uuid여야 한다.
+            per_request_headers = {
+                "Prompt-Msg-Id": str(uuid.uuid4()),
+                "Completion-Msg-Id": str(uuid.uuid4()),
+            }
+            resp = self.client.chat.completions.create(
+                extra_headers=per_request_headers, **kwargs
+            )
             content = resp.choices[0].message.content or ""
             try:
                 return schema.model_validate_json(_strip_code_fence(content))
