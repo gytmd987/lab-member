@@ -8,6 +8,10 @@
   2. 그 모델의 JSON 스키마를 프롬프트에 넣어 형식을 지정하고,
   3. response_format={"type":"json_object"}로 JSON을 유도한 뒤,
   4. Pydantic으로 검증하고, 실패하면 오류를 붙여 재시도한다.
+
+사이트 안에서 "다음에 뭘 할지"(연구실 링크 따라가기 / 구성원 페이지 열기 /
+여기서 추출 / 포기)는 decide_next_action이 매 스텝 결정한다 — 뼈대(스텝 상한,
+방문 중복 방지)는 코드가 강제하고, 선택만 LLM이 한다.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from typing import Literal
 
 from openai import OpenAI
 from pydantic import BaseModel, Field, ValidationError
@@ -33,17 +38,38 @@ class PageIdentification(BaseModel):
     reasoning: str
 
 
-class MemberPageDecision(BaseModel):
-    found: bool = Field(description="구성원(Members/People/Lab/Team) 페이지 링크를 찾았는가")
-    url: str | None = Field(default=None, description="찾았다면 이동할 절대 URL, 없으면 null")
+class NextAction(BaseModel):
+    """사이트 탐색 루프에서 다음 행동. 코드가 아니라 LLM이 고른다."""
+
+    action: Literal[
+        "follow_lab_link",    # 이 페이지는 프로필/안내 페이지 → 실제 연구실 홈페이지로 이동
+        "open_members_page",  # 이 사이트 안의 구성원(Members/People) 페이지로 이동
+        "extract_here",       # 현재 페이지에 구성원 명단이 있음 → 여기서 추출
+        "give_up",            # 이 사이트에서는 구성원 정보를 더 찾을 곳이 없음
+    ]
+    url: str | None = Field(
+        default=None,
+        description="follow_lab_link/open_members_page일 때 이동할 절대 URL(링크 목록에서 그대로), 그 외 null",
+    )
     reasoning: str
 
 
 class ExtractedMember(BaseModel):
-    name: str
-    role: str | None = None
+    name_kr: str | None = Field(
+        default=None, description="한글 이름. 페이지에 없으면 영문명에서 추정하고 '(추정)'을 붙임"
+    )
+    name_en: str | None = Field(
+        default=None, description="영문 이름. 페이지에 없으면 한글명에서 추정하고 '(추정)'을 붙임"
+    )
+    position: str | None = Field(
+        default=None, description="포닥 | 박사과정 | 석사과정 | 석박통합 중 하나"
+    )
     email: str | None = None
-    extra: str | None = None
+    phone: str | None = None
+    homepage: str | None = Field(
+        default=None, description="이 구성원의 개인페이지 절대 URL(링크 목록에서 매칭), 없으면 null"
+    )
+    research_area: str | None = None
 
 
 class MemberExtraction(BaseModel):
@@ -94,6 +120,24 @@ def _strip_code_fence(text: str) -> str:
     if start != -1 and end != -1 and end > start:
         return t[start : end + 1]
     return t.strip()
+
+
+def _link_lines(links: list[Link]) -> str:
+    return "\n".join(f"- [{l.text or '(no text)'}]({l.href})" for l in links)
+
+
+# 구성원 추출 공통 규칙 (extract_members / enrich_member가 공유)
+_MEMBER_RULES = (
+    "Include ONLY current members who are: postdocs (포닥), PhD students (박사과정), "
+    "MS students (석사과정), or integrated MS-PhD students (석박통합). "
+    "EXCLUDE: alumni/graduates (졸업생), the professor(s) themselves, undergraduate "
+    "students/interns (학부연구생), administrative staff, and visiting researchers whose "
+    "status is unclear. "
+    "For each member fill BOTH name_kr and name_en: if one is not written on the page, "
+    "infer it from the other (transliterate) and append ' (추정)' to the inferred value. "
+    "position must be one of: 포닥, 박사과정, 석사과정, 석박통합. "
+    "Do NOT invent emails, phones, URLs, or research areas — only use what the text/links show."
+)
 
 
 class LLM:
@@ -181,26 +225,50 @@ class LLM:
             max_tokens=512,
         )
 
-    def find_member_page(self, current_url: str, links: list[Link]) -> MemberPageDecision:
-        """메뉴/링크를 보고 구성원 페이지로 갈 링크를 고른다(탐색 1차)."""
-        link_lines = "\n".join(f"- [{l.text or '(no text)'}]({l.href})" for l in links)
+    def decide_next_action(
+        self,
+        professor_name: str,
+        current_url: str,
+        visited: list[str],
+        page_text: str,
+        links: list[Link],
+    ) -> NextAction:
+        """탐색 루프의 다음 행동을 고른다.
+
+        - 이 페이지가 교수 프로필/디렉토리/안내 페이지이고 실제 연구실 홈페이지
+          링크가 따로 있으면 follow_lab_link.
+        - 연구실 사이트 본체인데 구성원 페이지가 따로 있으면 open_members_page.
+        - 현재 페이지에 이미 구성원 명단이 보이면 extract_here.
+        - 더 볼 곳이 없으면 give_up.
+        """
+        visited_lines = "\n".join(f"- {u}" for u in visited) or "(none)"
         return self._complete(
             system=(
-                "You navigate a professor's website to find the page listing lab members "
-                "(students, postdocs, researchers). Members pages are variously labeled: "
-                "Members, People, Lab, Team, Group, Students, 구성원, 연구원, 사람들, etc. — "
-                "and sometimes members are on the main page itself. Choose the single best "
-                "link to follow, or report found=false if none of the links looks like a "
-                "members page. Return an absolute URL exactly as given in the list."
+                "You are navigating web pages to find the member roster (students/postdocs) "
+                f"of professor '{professor_name}''s research lab. Decide the single next action:\n"
+                "- follow_lab_link: the current page is a professor PROFILE/DIRECTORY/announcement "
+                "page (not the lab site itself) and it links to the actual lab homepage — go there. "
+                "Lab-homepage links may be labeled 연구실 홈페이지, 홈페이지, Lab, Website, etc.\n"
+                "- open_members_page: the current page IS the lab/personal site and one of its links "
+                "leads to a members page (Members, People, Team, Group, Students, 구성원, 연구원...).\n"
+                "- extract_here: the member roster is already visible in the current page text.\n"
+                "- give_up: none of the above applies and no link plausibly leads to members.\n"
+                "Rules: for follow_lab_link/open_members_page return the absolute URL exactly as it "
+                "appears in the LINKS list; NEVER pick a URL in the ALREADY VISITED list; a Google "
+                "Scholar/ResearchGate profile is not a lab homepage."
             ),
-            user=f"Current page: {current_url}\n\n--- LINKS ---\n{link_lines}",
-            schema=MemberPageDecision,
+            user=(
+                f"Current page: {current_url}\n"
+                f"--- ALREADY VISITED ---\n{visited_lines}\n\n"
+                f"--- PAGE TEXT ---\n{page_text}\n\n"
+                f"--- LINKS ---\n{_link_lines(links)}"
+            ),
+            schema=NextAction,
             max_tokens=512,
         )
 
     def extract_faculty(self, url: str, page_text: str, links: list[Link]) -> FacultyList:
         """학과 교수진 페이지에서 교수 목록(이름 + 개인/연구실 링크)을 뽑는다."""
-        link_lines = "\n".join(f"- [{l.text or '(no text)'}]({l.href})" for l in links)
         return self._complete(
             system=(
                 "This is a university department's faculty/people page. Extract the list of "
@@ -212,25 +280,48 @@ class LLM:
             ),
             user=(
                 f"Faculty page: {url}\n\n--- PAGE TEXT ---\n{page_text}\n\n"
-                f"--- LINKS ---\n{link_lines}"
+                f"--- LINKS ---\n{_link_lines(links)}"
             ),
             schema=FacultyList,
             max_tokens=8192,
         )
 
-    def extract_members(self, page_text: str) -> MemberExtraction:
-        """텍스트에서 구성원 명단을 뽑는다. 명단이 없으면 has_member_info=false."""
+    def extract_members(self, page_text: str, links: list[Link]) -> MemberExtraction:
+        """텍스트+링크에서 구성원 명단을 뽑는다. 명단이 없으면 has_member_info=false."""
         return self._complete(
             system=(
-                "Extract the lab's members (students, postdocs, researchers, staff) from the "
-                "page text. Include the professor only if listed among members. If the text "
-                "contains NO member/student roster at all, set has_member_info=false and return "
-                "an empty list — do NOT invent members and do NOT pull names from unrelated "
-                "sections (news, publications, alumni-only if ambiguous)."
+                "Extract the lab's member roster from the page text. "
+                + _MEMBER_RULES
+                + " For homepage, match each member to their personal-page link in the LINKS "
+                "list by name (link text or href); use the absolute URL as given; null if no "
+                "such link. If the text contains NO member roster at all, set "
+                "has_member_info=false and return an empty list — do NOT invent members and "
+                "do NOT pull names from unrelated sections (news, publications)."
             ),
-            user=f"--- PAGE TEXT ---\n{page_text}",
+            user=f"--- PAGE TEXT ---\n{page_text}\n\n--- LINKS ---\n{_link_lines(links)}",
             schema=MemberExtraction,
-            max_tokens=4096,
+            max_tokens=8192,
+        )
+
+    def enrich_member(self, member: ExtractedMember, page_url: str, page_text: str) -> ExtractedMember:
+        """구성원 개인페이지 텍스트로 빈 필드만 보강한다."""
+        current = member.model_dump_json(exclude_none=False)
+        return self._complete(
+            system=(
+                "You are given a lab member's known info (JSON) and the text of what should be "
+                "their personal homepage. Fill in ONLY the missing (null) fields — and you may "
+                "replace a name marked ' (추정)' with the confirmed spelling from the page. "
+                "Keep every other existing value unchanged. "
+                + _MEMBER_RULES
+                + " If the page does not appear to belong to this person, return the JSON "
+                "unchanged."
+            ),
+            user=(
+                f"--- KNOWN MEMBER INFO ---\n{current}\n\n"
+                f"--- PERSONAL PAGE ({page_url}) TEXT ---\n{page_text}"
+            ),
+            schema=ExtractedMember,
+            max_tokens=1024,
         )
 
     def judge_absence(self, page_text: str) -> AbsenceVerdict:
@@ -268,7 +359,17 @@ class LLM:
         )
 
 
+def to_member(e: ExtractedMember) -> Member:
+    return Member(
+        name_kr=e.name_kr,
+        name_en=e.name_en,
+        position=e.position,
+        email=e.email,
+        phone=e.phone,
+        homepage=e.homepage,
+        research_area=e.research_area,
+    )
+
+
 def to_members(extracted: list[ExtractedMember]) -> list[Member]:
-    return [
-        Member(name=m.name, role=m.role, email=m.email, extra=m.extra) for m in extracted
-    ]
+    return [to_member(e) for e in extracted]

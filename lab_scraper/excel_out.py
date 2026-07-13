@@ -29,7 +29,10 @@ _STATUS_LABEL = {
 }
 
 _SUMMARY_HEADERS = ["교수명", "학과", "상태", "사이트 URL", "구성원 수", "LLM 호출수", "비고"]
-_MEMBER_HEADERS = ["교수명", "학과", "이름", "역할", "이메일", "부가정보"]
+_MEMBER_HEADERS = [
+    "교수명", "학과", "한글명", "영문명", "직위",
+    "이메일", "전화번호", "개인 홈페이지", "연구분야",
+]
 
 
 def write_results(results: list[ProfessorResult], path: str) -> str:
@@ -53,10 +56,13 @@ def write_results(results: list[ProfessorResult], path: str) -> str:
         [
             r.professor.name,
             r.professor.department or "",
-            m.name,
-            m.role or "",
+            m.name_kr or "",
+            m.name_en or "",
+            m.position or "",
             m.email or "",
-            m.extra or "",
+            m.phone or "",
+            m.homepage or "",
+            m.research_area or "",
         ]
         for r in results
         for m in r.members

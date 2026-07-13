@@ -76,6 +76,18 @@ MAX_PAGE_CHARS = int(os.environ.get("LAB_SCRAPER_MAX_PAGE_CHARS", "40000"))
 # 탐색 단계에서 LLM에 넘길 링크 최대 개수.
 MAX_LINKS = int(os.environ.get("LAB_SCRAPER_MAX_LINKS", "150"))
 
+# --- 처리 파이프라인 ----------------------------------------------------
+# 동시에 처리할 교수 수 (스레드/브라우저 수. 사내 API 동시호출 수이기도 함).
+CONCURRENCY = int(os.environ.get("LAB_SCRAPER_CONCURRENCY", "4"))
+
+# 사이트 내 LLM 탐색 루프의 최대 스텝 수 (프로필→연구실→구성원 페이지 이동 등).
+MAX_NAV_STEPS = int(os.environ.get("LAB_SCRAPER_MAX_NAV_STEPS", "4"))
+
+# 학생 개인페이지 방문(정보 보강) 여부. 정보가 이미 충분한 멤버는 어차피 생략.
+VISIT_MEMBER_PAGES = os.environ.get("LAB_SCRAPER_VISIT_MEMBER_PAGES", "1") not in (
+    "0", "false", "",
+)
+
 # --- Selenium ----------------------------------------------------------
 # 페이지 로드 타임아웃(초). 초과하면 "접근 실패"로 기록.
 PAGE_LOAD_TIMEOUT = int(os.environ.get("LAB_SCRAPER_PAGE_TIMEOUT", "30"))

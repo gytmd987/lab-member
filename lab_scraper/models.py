@@ -27,10 +27,18 @@ class ProcessStatus(str, Enum):
 
 @dataclass
 class Member:
-    name: str
-    role: str | None = None          # 예: 박사과정, 석사과정, Postdoc, 학부연구생
+    """구성원 1명. 현재 소속 포닥/박사과정/석사과정(석박통합 포함)만 수집한다.
+
+    페이지에 없는 한글명/영문명은 LLM이 추정하고 값 뒤에 "(추정)"을 붙인다.
+    """
+
+    name_kr: str | None = None       # 한글명
+    name_en: str | None = None       # 영문명
+    position: str | None = None      # 포닥 | 박사과정 | 석사과정 | 석박통합
     email: str | None = None
-    extra: str | None = None         # 연구분야 등 부가정보
+    phone: str | None = None
+    homepage: str | None = None      # 개인페이지 절대 URL
+    research_area: str | None = None
 
 
 @dataclass

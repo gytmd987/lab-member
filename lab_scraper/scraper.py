@@ -1,29 +1,33 @@
 """교수 1명 처리 오케스트레이션.
 
-흐름 (설계 논의 그대로):
+흐름:
 
   1. 연구실/개인 페이지 URL 확보
        - 학과 페이지에서 받은 lab_url이 있으면 사용
        - 없으면 이름으로 재검색 → 검색결과에서 LLM이 본인 페이지 판정
        - 그래도 못 찾으면 → SITE_NOT_FOUND
-  2. 사이트 방문
-       - 접속 불가(404/타임아웃/로그인/추출불가) → ACCESS_FAILED, 스킵
-       - 도메인 종류는 안 봄. 어떤 사이트든 그대로 방문.
-  3. 구성원 페이지 탐색 (LLM이 메뉴/링크 판단, 1차)
-       - 찾으면 이동해서 텍스트 확보
-  4. 명단 추출
-       - 성공 → SUCCESS
-       - 실패 & 구성원 페이지로 이동했었다면 → 메인 페이지 전체 텍스트로 재시도
+  2. LLM 탐색 루프 (최대 MAX_NAV_STEPS 스텝, 방문 URL 중복 차단)
+       - 매 스텝 LLM이 다음 행동을 고른다:
+           follow_lab_link   : 프로필/안내 페이지 → 실제 연구실 홈페이지로 이동
+           open_members_page : 사이트 안의 구성원 페이지로 이동
+           extract_here      : 현재 페이지에서 명단 추출
+           give_up           : 더 볼 곳 없음
+       - 뼈대(스텝 상한, 중복 방지, 실패 폴백)는 코드가 강제한다.
+  3. 명단 추출 (실패 시 첫 페이지 텍스트로 1회 재시도)
+  4. 개인페이지 보강: homepage가 있고 정보가 부족한 멤버만 방문해서 빈 필드 채움
   5. 최종 판정
        - 명단이 애초에 없는 사이트 → NO_MEMBER_INFO (정상)
        - 어딘가 있는데 못 찾은 듯 → ACCESS_FAILED (검토 필요로 기록)
+
+  접근 실패(404/타임아웃/로그인/추출불가)만 예외로 취급하고,
+  도메인 종류(개인 도메인/Wix/GitHub Pages/Notion 등)는 보지 않는다.
 """
 
 from __future__ import annotations
 
 import logging
 
-from . import llm, search
+from . import config, llm, search
 from .browser import Browser, FetchResult
 from .config import MAX_SEARCH_ATTEMPTS
 from .models import ProcessStatus, ProfessorInput, ProfessorResult
@@ -52,10 +56,29 @@ def collect_professors(
     ]
 
 
+def needs_enrichment(m: llm.ExtractedMember) -> bool:
+    """개인페이지를 방문할 가치가 있는가 — 이미 정보가 충분하면 False.
+
+    기준: 이름이 미확정(누락 또는 '(추정)')이거나, 이메일/연구분야가 비어 있으면
+    방문한다. phone은 기준에서 제외 — 대부분 페이지에 없어서 기준에 넣으면
+    사실상 전원 방문이 된다.
+    """
+    def unconfirmed(name: str | None) -> bool:
+        return not name or "추정" in name
+
+    return (
+        unconfirmed(m.name_kr)
+        or unconfirmed(m.name_en)
+        or not m.email
+        or not m.research_area
+    )
+
+
 def process_professor(
     prof: ProfessorInput, browser: Browser, judge: llm.LLM
 ) -> ProfessorResult:
     result = ProfessorResult(professor=prof, status=ProcessStatus.SITE_NOT_FOUND)
+    notes: list[str] = []
 
     # 1. 사이트 URL 확보 -------------------------------------------------
     site_url = prof.lab_url or _discover_site(prof, browser, judge)
@@ -65,51 +88,99 @@ def process_professor(
         return result
     result.site_url = site_url
 
-    # 2. 사이트 방문 -----------------------------------------------------
-    fetch = browser.fetch(site_url)
-    if not fetch.ok:
+    first_fetch = browser.fetch(site_url)
+    if not first_fetch.ok:
         result.status = ProcessStatus.ACCESS_FAILED
-        result.detail = fetch.failure_reason
+        result.detail = first_fetch.failure_reason
         result.llm_calls = judge.calls
         return result
 
-    # 3. 구성원 페이지 탐색 (1차) ----------------------------------------
-    member_fetch: FetchResult | None = None
-    if fetch.links:
-        decision = judge.find_member_page(fetch.url, fetch.links)
-        if decision.found and decision.url and decision.url != fetch.url:
-            sub = browser.fetch(decision.url)
-            if sub.ok:
-                member_fetch = sub
-            else:
-                log.info("구성원 페이지 접근 실패(%s) → 메인 텍스트로 진행", sub.failure_reason)
+    # 2. LLM 탐색 루프 ----------------------------------------------------
+    current = first_fetch
+    visited: list[str] = [current.url]
+    gave_up = False
+    for step in range(config.MAX_NAV_STEPS):
+        decision = judge.decide_next_action(
+            prof.name, current.url, visited, current.text, current.links
+        )
+        log.info("[%s] step %d: %s → %s", prof.name, step + 1, decision.action, decision.url or "-")
 
-    # 4. 명단 추출 (구성원 페이지 우선, 없으면 메인) ----------------------
-    primary = member_fetch or fetch
-    extraction = judge.extract_members(primary.text)
+        if decision.action == "extract_here":
+            break
+        if decision.action == "give_up":
+            gave_up = True
+            break
 
-    # 4-b. 재시도: 구성원 페이지에서 못 찾았으면 메인 페이지 전체 텍스트 재검토
-    if not extraction.has_member_info and member_fetch is not None:
-        log.info("구성원 페이지에서 명단 미발견 → 메인 페이지 전체 텍스트 재시도")
-        extraction = judge.extract_members(fetch.text)
+        # follow_lab_link / open_members_page — 이동
+        target = decision.url
+        if not target or target in visited:
+            notes.append(f"step{step+1}: 이동 URL 없음/중복({target}) → 현재 페이지에서 추출")
+            break
+        nxt = browser.fetch(target)
+        if not nxt.ok:
+            notes.append(f"step{step+1}: {target} 접근 실패({nxt.failure_reason}) → 현재 페이지에서 추출")
+            break
+        if decision.action == "follow_lab_link":
+            # 실제 연구실 홈페이지로 갈아탐 — 결과에 기록
+            result.site_url = nxt.url
+            notes.append(f"연구실 홈페이지로 이동: {nxt.url}")
+        current = nxt
+        visited.append(current.url)
+    # (상한 도달 시에도 마지막 페이지에서 추출을 시도한다)
 
-    if extraction.has_member_info and extraction.members:
-        result.status = ProcessStatus.SUCCESS
-        result.members = llm.to_members(extraction.members)
-        result.detail = extraction.reasoning
-        result.llm_calls = judge.calls
-        return result
+    # 3. 명단 추출 ---------------------------------------------------------
+    if not gave_up:
+        extraction = judge.extract_members(current.text, current.links)
+        # 재시도: 이동한 페이지에서 못 찾았으면 첫 페이지 텍스트 재검토
+        if not extraction.has_member_info and current.url != first_fetch.url:
+            log.info("[%s] 명단 미발견 → 첫 페이지 전체 텍스트 재시도", prof.name)
+            extraction = judge.extract_members(first_fetch.text, first_fetch.links)
 
-    # 5. 최종 판정: 정보 없음(정상) vs 못 찾음(검토 필요) -----------------
-    verdict = judge.judge_absence(fetch.text)
+        if extraction.has_member_info and extraction.members:
+            # 4. 개인페이지 보강 (정보 부족 + homepage 있는 멤버만) ---------
+            members = list(extraction.members)
+            if config.VISIT_MEMBER_PAGES:
+                members = [
+                    _maybe_enrich(m, prof.name, browser, judge) for m in members
+                ]
+            result.status = ProcessStatus.SUCCESS
+            result.members = llm.to_members(members)
+            result.detail = "; ".join(notes) or extraction.reasoning
+            result.llm_calls = judge.calls
+            return result
+
+    # 5. 최종 판정: 정보 없음(정상) vs 못 찾음(검토 필요) -------------------
+    verdict = judge.judge_absence(current.text)
     if verdict.genuinely_absent:
         result.status = ProcessStatus.NO_MEMBER_INFO
+        result.detail = "; ".join(notes) or verdict.reasoning
     else:
         result.status = ProcessStatus.ACCESS_FAILED
-        result.detail = "명단이 있을 가능성이 있으나 크롤러가 도달하지 못함(검토 필요): " + verdict.reasoning
-    result.detail = result.detail or verdict.reasoning
+        result.detail = (
+            "명단이 있을 가능성이 있으나 크롤러가 도달하지 못함(검토 필요): "
+            + verdict.reasoning
+            + ("; " + "; ".join(notes) if notes else "")
+        )
     result.llm_calls = judge.calls
     return result
+
+
+def _maybe_enrich(
+    member: llm.ExtractedMember, prof_name: str, browser: Browser, judge: llm.LLM
+) -> llm.ExtractedMember:
+    """homepage가 있고 정보가 부족한 멤버만 개인페이지를 방문해 보강한다."""
+    if not member.homepage or not needs_enrichment(member):
+        return member
+    fetch = browser.fetch(member.homepage)
+    if not fetch.ok:
+        log.info("[%s] 개인페이지 접근 실패(%s): %s",
+                 prof_name, fetch.failure_reason, member.homepage)
+        return member
+    try:
+        return judge.enrich_member(member, fetch.url, fetch.text)
+    except Exception as exc:  # 보강 실패는 치명적이지 않다 — 원본 유지
+        log.warning("[%s] 개인페이지 보강 실패: %s", prof_name, exc)
+        return member
 
 
 def _discover_site(prof: ProfessorInput, browser: Browser, judge: llm.LLM) -> str | None:
