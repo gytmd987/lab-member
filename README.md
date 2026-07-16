@@ -100,6 +100,11 @@ export LAB_SCRAPER_LLM_SEND_MSG_IDS=0   # Prompt-Msg-Id/Completion-Msg-Id(이전
 게이트웨이가 `response_format`을 거부하면 `LAB_SCRAPER_JSON_MODE=0`으로 끄면
 프롬프트만으로 JSON을 유도한다.
 
+> **"Invalid JSON: EOF" 파싱 경고가 뜰 때**: 응답이 `max_tokens` 한도에서 잘린
+> 것이다. 잘림(`finish_reason=length`)이 감지되면 한도를 2배로 늘려 자동
+> 재시도하므로("잘림 → 늘려 재시도" 로그) 대부분 자체 복구된다. 재시도 횟수는
+> `LAB_SCRAPER_JSON_RETRIES`(기본 2)로 조절.
+
 ## 실행
 
 가장 간단한 방법 — 학과 교수진 페이지 URL만 넣으면 교수 목록을 자동으로

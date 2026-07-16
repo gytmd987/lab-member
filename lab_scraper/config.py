@@ -79,8 +79,8 @@ def fixed_headers() -> dict:
 # 아래를 false로 두면 프롬프트만으로 JSON을 유도한다.
 USE_JSON_MODE = os.environ.get("LAB_SCRAPER_JSON_MODE", "1") not in ("0", "false", "")
 
-# JSON 파싱 실패 시 재시도 횟수.
-JSON_RETRIES = int(os.environ.get("LAB_SCRAPER_JSON_RETRIES", "1"))
+# JSON 파싱 실패 시 재시도 횟수 (잘림 1회 + 형식오류 1회까지 흡수하도록 2).
+JSON_RETRIES = int(os.environ.get("LAB_SCRAPER_JSON_RETRIES", "2"))
 
 # LLM에 넘기는 페이지 텍스트 최대 길이(문자). 이 이상은 잘라내되,
 # 잘렸다는 사실은 호출부에서 로깅한다(무단 절삭 금지).

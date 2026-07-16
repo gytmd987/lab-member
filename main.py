@@ -34,7 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from lab_scraper import config, excel_out, llm
 from lab_scraper.browser import Browser
-from lab_scraper.models import ProfessorInput, ProfessorResult
+from lab_scraper.models import ProcessStatus, ProfessorInput, ProfessorResult
 from lab_scraper.scraper import collect_professors, process_professor
 
 DEFAULT_OUTPUT = "results.xlsx"
@@ -99,7 +99,18 @@ def _run_parallel(
         # llm_calls 카운터가 교수별로 정확히 잡히게 한다.
         judge = llm.LLM(client=shared_client)
         log.info("[%s] 처리 시작", prof.name)
-        res = process_professor(prof, pool.get(), judge)
+        try:
+            res = process_professor(prof, pool.get(), judge)
+        except Exception as exc:
+            # 한 교수의 실패(LLM 재시도 소진, 드라이버 크래시 등)가 전체 실행을
+            # 죽이지 않게 격리한다. 실패 사유는 엑셀 요약의 비고로 남는다.
+            log.error("[%s] 처리 실패: %s", prof.name, exc)
+            res = ProfessorResult(
+                professor=prof,
+                status=ProcessStatus.ACCESS_FAILED,
+                detail=f"처리 중 오류: {exc}",
+                llm_calls=judge.calls,
+            )
         log.info(
             "[%s] → %s (members=%d, llm_calls=%d)",
             prof.name, res.status.value, len(res.members), res.llm_calls,

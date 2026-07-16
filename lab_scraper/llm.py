@@ -166,6 +166,7 @@ class LLM:
         sys_prompt = (
             f"{system}\n\n"
             "Respond with a single JSON object and nothing else. "
+            "Keep any 'reasoning' field to ONE short sentence. "
             "It must validate against this JSON Schema:\n"
             f"{schema_hint}"
         )
@@ -197,13 +198,25 @@ class LLM:
             resp = self.client.chat.completions.create(
                 extra_headers=per_request_headers or None, **kwargs
             )
-            content = resp.choices[0].message.content or ""
+            choice = resp.choices[0]
+            content = choice.message.content or ""
+            truncated = getattr(choice, "finish_reason", None) == "length"
             try:
                 return schema.model_validate_json(_strip_code_fence(content))
             except (ValidationError, json.JSONDecodeError, ValueError) as exc:
                 last_err = exc
+                if truncated:
+                    # max_tokens 한도에서 잘림(EOF의 주원인) → 한도를 늘려
+                    # 같은 메시지로 재시도. 정정 메시지를 붙여봐야 소용없다.
+                    old = kwargs["max_tokens"]
+                    kwargs["max_tokens"] = min(old * 2, 16384)
+                    log.warning(
+                        "응답이 max_tokens=%d에서 잘림 → %d로 늘려 재시도 (attempt %d)",
+                        old, kwargs["max_tokens"], attempt + 1,
+                    )
+                    continue
                 log.warning("JSON 파싱 실패(attempt %d): %s", attempt + 1, exc)
-                # 다음 시도에 오류를 알려주고 다시 요청한다.
+                # 형식 오류: 다음 시도에 오류를 알려주고 정정을 요청한다.
                 messages.append({"role": "assistant", "content": content})
                 messages.append(
                     {
@@ -231,7 +244,7 @@ class LLM:
                 f"--- PAGE TEXT ---\n{page_text}"
             ),
             schema=PageIdentification,
-            max_tokens=512,
+            max_tokens=2048,
         )
 
     def decide_next_action(
@@ -273,7 +286,7 @@ class LLM:
                 f"--- LINKS ---\n{_link_lines(links)}"
             ),
             schema=NextAction,
-            max_tokens=512,
+            max_tokens=2048,
         )
 
     def extract_faculty(self, url: str, page_text: str, links: list[Link]) -> FacultyList:
@@ -330,7 +343,7 @@ class LLM:
                 f"--- PERSONAL PAGE ({page_url}) TEXT ---\n{page_text}"
             ),
             schema=ExtractedMember,
-            max_tokens=1024,
+            max_tokens=2048,
         )
 
     def judge_absence(self, page_text: str) -> AbsenceVerdict:
@@ -345,7 +358,7 @@ class LLM:
             ),
             user=f"--- PAGE TEXT ---\n{page_text}",
             schema=AbsenceVerdict,
-            max_tokens=512,
+            max_tokens=2048,
         )
 
     def judge_search_results(
@@ -364,7 +377,7 @@ class LLM:
                 f"Professor: {professor_name}{dept}\n\n--- SEARCH RESULTS ---\n{results_text}"
             ),
             schema=SearchJudgement,
-            max_tokens=512,
+            max_tokens=2048,
         )
 
 
