@@ -22,6 +22,12 @@ import uuid
 from typing import Literal
 
 from openai import OpenAI
+
+try:  # Authorization 헤더 제거용 센티널 (구버전 SDK는 _types에만 있음)
+    from openai import Omit
+except ImportError:  # pragma: no cover
+    from openai._types import Omit
+
 from pydantic import BaseModel, Field, ValidationError
 
 from . import config
@@ -180,13 +186,16 @@ class LLM:
         last_err: Exception | None = None
         for attempt in range(config.JSON_RETRIES + 1):
             self.calls += 1
-            # Prompt-Msg-Id / Completion-Msg-Id는 요청마다 새 uuid여야 한다.
-            per_request_headers = {
-                "Prompt-Msg-Id": str(uuid.uuid4()),
-                "Completion-Msg-Id": str(uuid.uuid4()),
-            }
+            per_request_headers: dict = {}
+            if config.SEND_MSG_ID_HEADERS:
+                # Prompt-Msg-Id / Completion-Msg-Id는 요청마다 새 uuid여야 한다.
+                per_request_headers["Prompt-Msg-Id"] = str(uuid.uuid4())
+                per_request_headers["Completion-Msg-Id"] = str(uuid.uuid4())
+            if not config.SEND_AUTH_HEADER:
+                # 키 없는 게이트웨이용: SDK가 붙이는 Bearer 헤더를 제거한다.
+                per_request_headers["Authorization"] = Omit()
             resp = self.client.chat.completions.create(
-                extra_headers=per_request_headers, **kwargs
+                extra_headers=per_request_headers or None, **kwargs
             )
             content = resp.choices[0].message.content or ""
             try:

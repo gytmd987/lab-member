@@ -79,6 +79,21 @@ export LAB_SCRAPER_LLM_USER_TYPE='id'                         # User-Type
 그 외 게이트웨이가 요구하는 추가 고정 헤더가 있으면
 `LAB_SCRAPER_LLM_HEADERS='{"X-Extra":"value"}'`(JSON)로 넣으면 된다.
 
+**인증이 아예 없는 API로 바꿀 때**: 위 4개 헤더 변수를 지우고(빈 값이면 자동
+미전송) 아래 두 개를 추가한다.
+
+```bash
+export LAB_SCRAPER_LLM_SEND_AUTH=0      # openai SDK가 무조건 붙이는 Authorization: Bearer 제거
+export LAB_SCRAPER_LLM_SEND_MSG_IDS=0   # Prompt-Msg-Id/Completion-Msg-Id(이전 API 전용) 미전송
+```
+
+> **curl로는 되는데 SDK로는 403이 날 때**: 십중팔구 `Authorization: Bearer dummy`
+> 때문이다(openai SDK는 키가 없어도 이 헤더를 붙임; curl 테스트에는 없던 헤더).
+> `LAB_SCRAPER_LLM_SEND_AUTH=0`으로 끄면 curl과 동일한 요청이 된다. 그래도
+> 403이면 (a) base_url 경로가 예제와 정확히 같은지(`/v1` 포함 여부), (b) 사내
+> 프록시 경유 여부(`HTTPS_PROXY`가 설정돼 있으면 `NO_PROXY=<API 호스트>` 추가)를
+> 확인한다.
+
 사내 API가 JSON 스키마 강제(structured outputs)까지는 아니고 **JSON 모드만**
 지원하므로, `response_format={"type":"json_object"}`로 요청하고 프롬프트에
 스키마를 명시한 뒤 Pydantic으로 검증한다(파싱 실패 시 오류를 붙여 재시도).

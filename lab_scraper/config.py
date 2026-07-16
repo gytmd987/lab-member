@@ -16,6 +16,19 @@ LLM_BASE_URL = os.environ.get("LAB_SCRAPER_LLM_BASE_URL")  # 예: http://llm.int
 LLM_API_KEY = os.environ.get("LAB_SCRAPER_LLM_API_KEY", "dummy")  # 대개 더미
 MODEL = os.environ.get("LAB_SCRAPER_MODEL", "gemma4")  # 사내 모델 이름으로 지정
 
+# Authorization 헤더(Bearer <api_key>) 전송 여부. openai 라이브러리는 이 헤더를
+# 무조건 붙이는데, 키가 아예 없는 게이트웨이 중에는 "Authorization이 없으면
+# 통과, 있는데 값이 이상하면 403"으로 동작하는 곳이 있다 → 그런 API면 0으로 끈다.
+SEND_AUTH_HEADER = os.environ.get("LAB_SCRAPER_LLM_SEND_AUTH", "1") not in (
+    "0", "false", "",
+)
+
+# Prompt-Msg-Id / Completion-Msg-Id(요청마다 새 uuid) 전송 여부.
+# 이전 사내 API 전용 항목이라, 새 API가 이상하게 반응하면 0으로 끈다.
+SEND_MSG_ID_HEADERS = os.environ.get("LAB_SCRAPER_LLM_SEND_MSG_IDS", "1") not in (
+    "0", "false", "",
+)
+
 # --- 사내 게이트웨이 헤더 (고정, 앱 공통) ------------------------------
 # 사내 API 예제의 default_headers에 대응. 값은 환경변수로 지정한다.
 #   x-dep-ticket     : 인증 크리덴셜 (예: "credential:TICKET-....")
